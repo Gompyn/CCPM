@@ -29,10 +29,12 @@ import numpy as np
 import torch
 from datasets import load_dataset
 
+import json
+
 import transformers
 from transformers import (
     AutoConfig,
-    AutoModelForMultipleChoice,
+    BertForSequenceClassification,
     AutoTokenizer,
     HfArgumentParser,
     Trainer,
@@ -42,8 +44,7 @@ from transformers import (
 )
 from transformers.file_utils import PaddingStrategy
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
-from transformers.trainer_utils import get_last_checkpoint
-from transformers.utils import check_min_version
+from transformers.trainer_utils import get_last_checkpoint, PredictionOutput
 
 
 
@@ -97,6 +98,10 @@ class DataTrainingArguments:
         default=None,
         metadata={"help": "An optional input evaluation data file to evaluate the perplexity on (a text file)."},
     )
+    predict_file: Optional[str] = field(
+        default=None,
+        metadata={"help": "An optional input test data file to predict on (a text file)."},
+    )
     overwrite_cache: bool = field(
         default=False, metadata={"help": "Overwrite the cached training and evaluation sets"}
     )
@@ -133,6 +138,19 @@ class DataTrainingArguments:
             "value if set."
         },
     )
+    max_predict_samples: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "For debugging purposes or quicker training, truncate the number of prediction examples to this "
+            "value if set."
+        },
+    )
+    save_prediction_path: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "will save all predictions to this path. "
+        },
+    )
 
     def __post_init__(self):
         if self.train_file is not None:
@@ -144,9 +162,9 @@ class DataTrainingArguments:
 
 
 @dataclass
-class DataCollatorForMultipleChoice:
+class DataCollatorForSequenceClassification:
     """
-    Data collator that will dynamically pad the inputs for multiple choice received.
+    Data collator that will dynamically pad the inputs for sequence classification received.
     Args:
         tokenizer (:class:`~transformers.PreTrainedTokenizer` or :class:`~transformers.PreTrainedTokenizerFast`):
             The tokenizer used for encoding the data.
@@ -173,28 +191,13 @@ class DataCollatorForMultipleChoice:
     pad_to_multiple_of: Optional[int] = None
 
     def __call__(self, features):
-        label_name = "labels"
-        # print(features[0].keys())
-        labels = [feature.pop(label_name) for feature in features]
-        batch_size = len(features)
-        num_choices = len(features[0]["input_ids"])
-        flattened_features = [
-            [{k: v[i] for k, v in feature.items()} for i in range(num_choices)] for feature in features
-        ]
-        flattened_features = sum(flattened_features, [])
-
         batch = self.tokenizer.pad(
-            flattened_features,
+            features,
             padding=self.padding,
             max_length=self.max_length,
             pad_to_multiple_of=self.pad_to_multiple_of,
             return_tensors="pt",
         )
-
-        # Un-flatten
-        batch = {k: v.view(batch_size, num_choices, -1) for k, v in batch.items()}
-        # Add back labels
-        batch["labels"] = torch.tensor(labels, dtype=torch.int64)
         return batch
 
 
@@ -258,15 +261,19 @@ def main():
 
     # In distributed training, the load_dataset function guarantee that only one local process can concurrently
     # download the dataset.
-    if data_args.train_file is not None or data_args.validation_file is not None:
+    def get_dataset(data_args):
         data_files = {}
-        if data_args.train_file is not None:
+        if data_args.train_file:
             data_files["train"] = data_args.train_file
-        if data_args.validation_file is not None:
+        if data_args.validation_file:
             data_files["validation"] = data_args.validation_file
-        raw_datasets = load_dataset("json", data_files=data_files, cache_dir=model_args.cache_dir)
-    else:
-        raise ValueError("train file and validation file are supposed to be specified")
+        if data_args.predict_file:
+            data_files["predict"] = data_args.predict_file
+        if not data_files:
+            raise ValueError("At least one of `train_file`, `validation_file`, `predict_file` must be specified.")
+        return load_dataset("json", data_files=data_files, cache_dir=model_args.cache_dir)
+    
+    raw_datasets = get_dataset(data_args)
 
     # Load pretrained model and tokenizer
 
@@ -278,6 +285,7 @@ def main():
         cache_dir=model_args.cache_dir,
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
+        num_labels=4,
     )
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.tokenizer_name if model_args.tokenizer_name else model_args.model_name_or_path,
@@ -286,7 +294,7 @@ def main():
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
     )
-    model = AutoModelForMultipleChoice.from_pretrained(
+    model = BertForSequenceClassification.from_pretrained(
         model_args.model_name_or_path,
         from_tf=bool(".ckpt" in model_args.model_name_or_path),
         config=config,
@@ -317,31 +325,54 @@ def main():
         max_seq_length = min(data_args.max_seq_length, tokenizer.model_max_length)
 
     # Preprocessing the datasets.
-    def preprocess_function(examples):
-        translation = [[context] * 4 for context in examples[context_name]]
-        classic_poetry = [
-            [c for c in choices] for choices in examples[choice_name]
+    def preprocess_function_sep(examples, sep: str=f' {tokenizer.sep_token} '):
+        input = [
+            sep.join([translation] + choices)
+            for translation, choices in zip(examples[context_name], examples[choice_name])
         ]
 
         # Flatten out
-        first_sentences = sum(translation, [])
-        second_sentences = sum(classic_poetry, [])
+        # first_sentences = sum(translation, [])
+        # second_sentences = sum(classic_poetry, [])
 
         # Tokenize
         tokenized_examples = tokenizer(
-            first_sentences,
-            second_sentences,
+            input,
             truncation=True,
             max_length=max_seq_length,
             padding="max_length" if data_args.pad_to_max_length else False,
         )
-        results = {}
-        results.update({k: [v[i : i + 4] for i in range(0, len(v), 4)] for k, v in tokenized_examples.items()})
-        results['labels'] = [ answer for answer in examples['answer']]
-        # print(results)
-        # Un-flatten
-        return results 
+        if 'answer' in examples:
+            tokenized_examples['labels'] = examples['answer']
+        return tokenized_examples 
 
+    # Preprocessing the datasets.
+    def preprocess_function_punc(examples):
+        PUNC = ['。', '？', '！', '；', '”', '：']
+        input = []
+        for translation, choices in zip(examples[context_name], examples[choice_name]):
+            if translation[-1] not in PUNC:
+                translation = translation + PUNC[0]
+            if choices[0][-1] not in PUNC:
+                choices = [choice + translation[-1] for choice in choices]
+            input.append(''.join([translation] + choices))
+
+        # Flatten out
+        # first_sentences = sum(translation, [])
+        # second_sentences = sum(classic_poetry, [])
+
+        # Tokenize
+        tokenized_examples = tokenizer(
+            input,
+            truncation=True,
+            max_length=max_seq_length,
+            padding="max_length" if data_args.pad_to_max_length else False,
+        )
+        if 'answer' in examples:
+            tokenized_examples['labels'] = examples['answer']
+        return tokenized_examples 
+
+    preprocess_function = preprocess_function_punc
 
     if training_args.do_train:
         if "train" not in raw_datasets:
@@ -371,11 +402,27 @@ def main():
                 load_from_cache_file=not data_args.overwrite_cache,
             )
 
+    if training_args.do_predict:
+        if "predict" not in raw_datasets:
+            raise ValueError("--do_predict requires a predict dataset")
+        predict_dataset = raw_datasets["predict"]
+        if data_args.max_predict_samples is not None:
+            predict_dataset = predict_dataset.select(range(data_args.max_predict_samples))
+        if not data_args.save_prediction_path:
+            raise ValueError("--save_prediction_path must be specified when doing predictions")
+        with training_args.main_process_first(desc="predict dataset map pre-processing"):
+            predict_dataset = predict_dataset.map(
+                preprocess_function,
+                batched=True,
+                num_proc=data_args.preprocessing_num_workers,
+                load_from_cache_file=not data_args.overwrite_cache,
+            )
+
     # Data collator
     data_collator = (
         default_data_collator
         if data_args.pad_to_max_length
-        else DataCollatorForMultipleChoice(tokenizer=tokenizer, pad_to_multiple_of=8 if training_args.fp16 else None)
+        else DataCollatorForSequenceClassification(tokenizer=tokenizer, pad_to_multiple_of=8 if training_args.fp16 else None)
     )
 
     # Metric
@@ -425,6 +472,15 @@ def main():
 
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
+    
+    # Prediction
+    if training_args.do_predict:
+        logger.info("*** Predict ***")
+        predictions: PredictionOutput = trainer.predict(predict_dataset)
+        my_answer = predictions.predictions.argmax(axis=1)
+        with open(data_args.save_prediction_path, 'w') as f:
+            for answer in my_answer:
+                print(json.dumps({"answer": int(answer)}), file=f)
 
 
 def _mp_fn(index):
