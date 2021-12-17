@@ -351,7 +351,7 @@ def main():
         PUNC = ['。', '？', '！', '；', '”', '：']
         input = []
         for translation, choices in zip(examples[context_name], examples[choice_name]):
-            if translation[-1] not in PUNC:
+            if translation == '' or translation[-1] not in PUNC:
                 translation = translation + PUNC[0]
             if choices[0][-1] not in PUNC:
                 choices = [choice + translation[-1] for choice in choices]
