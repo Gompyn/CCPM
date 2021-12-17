@@ -9,7 +9,7 @@ TOKENIZERS_PARALLELISM=true python main.py \
           --per_device_train_batch_size=64 \
           --overwrite_output \
           --evaluation_strategy 'epoch' \
-          --save_strategy 'epoch'
+          --save_strategy 'epoch' \
           --dataloader_num_workers=8 \
           --load_best_model_at_end \
           --metric_for_best_model 'accuracy' \

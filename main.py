@@ -347,14 +347,14 @@ def main():
         return tokenized_examples 
 
     # Preprocessing the datasets.
-    def preprocess_function_punc(examples):
+    def preprocess_function_punc(examples, sep: str=f' {tokenizer.sep_token} '):
         PUNC = ['。', '？', '！', '；', '”', '：']
         input = []
         for translation, choices in zip(examples[context_name], examples[choice_name]):
-            if translation[-1] not in PUNC:
+            if translation == '' or translation[-1] not in PUNC:
                 translation = translation + PUNC[0]
             if choices[0][-1] not in PUNC:
-                choices = [choice + translation[-1] for choice in choices]
+                choices = [sep + choice + translation[-1] for choice in choices]
             input.append(''.join([translation] + choices))
 
         # Flatten out
