@@ -372,7 +372,7 @@ def main():
             tokenized_examples['labels'] = examples['answer']
         return tokenized_examples 
 
-    preprocess_function = preprocess_function_punc
+    preprocess_function = preprocess_function_sep
 
     if training_args.do_train:
         if "train" not in raw_datasets:
