@@ -325,9 +325,9 @@ def main():
         max_seq_length = min(data_args.max_seq_length, tokenizer.model_max_length)
 
     # Preprocessing the datasets.
-    def preprocess_function_sep(examples, sep: str=f' {tokenizer.sep_token} '):
+    def preprocess_function_sep(examples, sep: str=f'{tokenizer.sep_token}'):
         input = [
-            sep.join([translation] + choices)
+            translation + sep.join(choices)
             for translation, choices in zip(examples[context_name], examples[choice_name])
         ]
 
@@ -372,7 +372,7 @@ def main():
             tokenized_examples['labels'] = examples['answer']
         return tokenized_examples 
 
-    preprocess_function = preprocess_function_punc
+    preprocess_function = preprocess_function_sep
 
     if training_args.do_train:
         if "train" not in raw_datasets:
