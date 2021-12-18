@@ -1,5 +1,5 @@
 TOKENIZERS_PARALLELISM=true CUDA_VISIBLE_DEVICES=0,1,2,3 python main.py \
-          --model_name_or_path SIKU-BERT/sikubert \
+          --model_name_or_path SIKU-BERT/sikuroberta \
           --do_train --train_file data/train.jsonl \
           --do_eval  --validation_file data/valid.jsonl \
           --learning_rate 5e-5  --fp16 \
