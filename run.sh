@@ -10,6 +10,7 @@ TOKENIZERS_PARALLELISM=true python main.py \
           --overwrite_output \
           --evaluation_strategy 'epoch' \
           --save_strategy 'epoch' \
+          --logging_strategy 'epoch' \
           --dataloader_num_workers=8 \
           --load_best_model_at_end \
           --metric_for_best_model 'accuracy' \
