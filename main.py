@@ -351,10 +351,11 @@ def main():
         PUNC = ['。', '？', '！', '；', '”', '：']
         input = []
         for translation, choices in zip(examples[context_name], examples[choice_name]):
-            if translation[-1] not in PUNC:
-                translation = translation + PUNC[0]
-            if choices[0][-1] not in PUNC:
-                choices = [choice + translation[-1] for choice in choices]
+            if translation:
+                if translation[-1] not in PUNC:
+                    translation = translation + PUNC[0]
+                if choices[0][-1] not in PUNC:
+                    choices = [choice + translation[-1] for choice in choices]
             input.append(''.join([translation] + choices))
 
         # Flatten out
@@ -372,7 +373,7 @@ def main():
             tokenized_examples['labels'] = examples['answer']
         return tokenized_examples 
 
-    preprocess_function = preprocess_function_sep
+    preprocess_function = preprocess_function_punc
 
     if training_args.do_train:
         if "train" not in raw_datasets:
