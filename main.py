@@ -23,7 +23,9 @@ import os
 import sys
 from dataclasses import dataclass, field
 from typing import Optional, Union
-
+import pandas as pd
+from opencc import OpenCC
+cc = OpenCC('s2t')
 import datasets
 import numpy as np
 import torch
@@ -324,6 +326,44 @@ def main():
             )
         max_seq_length = min(data_args.max_seq_length, tokenizer.model_max_length)
 
+    # tone embedding
+    def generate_tone_dict(file_path=None):
+        file_path='广韵.csv'
+        df_fan=pd.read_csv(file_path)
+        word_list=[]
+        tone_list=[]
+        for idx,row in df_fan.iterrows():
+            word_list.append(row['字頭覈校前'])
+            tone_list.append(row['最簡描述'][-1])
+        tone_dict={}
+        tone_to_num={'平': 0, '上': 1, '去': 2, '入': 3}
+        for i in range (len(word_list)):
+            if word_list[i] in tone_dict:
+                tone_dict[word_list[i]][tone_to_num[tone_list[i]]]+=1
+            else:
+                tone_dict[word_list[i]]=[0,0,0,0]
+                tone_dict[word_list[i]][tone_to_num[tone_list[i]]]=1
+        return tone_dict
+    
+    def generate_tone_ids(input_sentence,tone_dict):
+        input_sentence = cc.convert(input_sentence)
+        ping_list=[]
+        shang_list=[]
+        qu_list=[]
+        ru_list=[]
+        for w in input_sentence:
+            if w in tone_dict:
+                ping_list.append(1 if tone_dict[w][0] else 0)
+                shang_list.append(1 if tone_dict[w][1] else 0)
+                qu_list.append(1 if tone_dict[w][2] else 0)
+                ru_list.append(1 if tone_dict[w][3] else 0)
+            else:
+                ping_list.append(0)
+                shang_list.append(0)
+                qu_list.append(0)
+                ru_list.append(0)
+        return ping_list,shang_list,qu_list,ru_list
+
     # Preprocessing the datasets.
     def preprocess_function_sep(examples, sep: str=f'{tokenizer.sep_token}'):
         input = [
@@ -350,12 +390,19 @@ def main():
     def preprocess_function_punc(examples):
         PUNC = ['。', '？', '！', '；', '”', '：']
         input = []
+        ping_list,shang_list,qu_list,ru_list=[],[],[],[]
+        tone_dict=generate_tone_dict()
         for translation, choices in zip(examples[context_name], examples[choice_name]):
             if translation:
                 if translation[-1] not in PUNC:
                     translation = translation + PUNC[0]
-                if choices[0][-1] not in PUNC:
-                    choices = [choice + translation[-1] for choice in choices]
+            if choices[0][-1] not in PUNC:
+                choices = [choice + translation[-1] for choice in choices]
+            ping,shang,qu,ru=generate_tone_ids(''.join(choices),tone_dict)
+            ping_list.append(ping+[0])
+            shang_list.append(shang+[0])
+            qu_list.append(qu+[0])
+            ru_list.append(ru+[0])
             input.append(''.join([translation] + choices))
 
         # Flatten out
@@ -369,8 +416,18 @@ def main():
             max_length=max_seq_length,
             padding="max_length" if data_args.pad_to_max_length else False,
         )
+        for i in range(len(ping_list)):
+            ping_list[i]=[0 for j in range(len(tokenized_examples['input_ids'][i])-len(ping_list[i]))]+ping_list[i]
+            shang_list[i]=[0 for j in range(len(tokenized_examples['input_ids'][i])-len(shang_list[i]))]+shang_list[i]
+            qu_list[i]=[0 for j in range(len(tokenized_examples['input_ids'][i])-len(qu_list[i]))]+qu_list[i]
+            ru_list[i]=[0 for j in range(len(tokenized_examples['input_ids'][i])-len(ru_list[i]))]+ru_list[i]
+        tokenized_examples['ping_ids']=ping_list
+        tokenized_examples['shang_ids']=shang_list
+        tokenized_examples['qu_ids']=qu_list
+        tokenized_examples['ru_ids']=ru_list
         if 'answer' in examples:
             tokenized_examples['labels'] = examples['answer']
+
         return tokenized_examples 
 
     preprocess_function = preprocess_function_punc
