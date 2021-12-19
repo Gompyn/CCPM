@@ -351,10 +351,12 @@ def main():
         PUNC = ['。', '？', '！', '；', '”', '：']
         input = []
         for translation, choices in zip(examples[context_name], examples[choice_name]):
+            translation = '选出下面的翻译对应的古文：' + translation
             if translation == '' or translation[-1] not in PUNC:
                 translation = translation + PUNC[0]
             if choices[0][-1] not in PUNC:
-                choices = [sep + choice + translation[-1] for choice in choices]
+                choices = [choice + translation[-1] for choice in choices]
+            choices = [f"{c}. {choice} " for choice, c in zip(choices, 'ABCD')]
             input.append(''.join([translation] + choices))
 
         # Flatten out
