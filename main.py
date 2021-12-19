@@ -349,13 +349,15 @@ def main():
     # Preprocessing the datasets.
     def preprocess_function_punc(examples):
         PUNC = ['。', '？', '！', '；', '”', '：']
-        input = []
+        translations = []
+        all_choices = []
         for translation, choices in zip(examples[context_name], examples[choice_name]):
             if translation == '' or translation[-1] not in PUNC:
                 translation = translation + PUNC[0]
             if choices[0][-1] not in PUNC:
                 choices = [choice + translation[-1] for choice in choices]
-            input.append(''.join([translation] + choices))
+            translations.append(translation)
+            all_choices.append(''.join(choices))
 
         # Flatten out
         # first_sentences = sum(translation, [])
@@ -363,7 +365,8 @@ def main():
 
         # Tokenize
         tokenized_examples = tokenizer(
-            input,
+            translations,
+            all_choices,
             truncation=True,
             max_length=max_seq_length,
             padding="max_length" if data_args.pad_to_max_length else False,
