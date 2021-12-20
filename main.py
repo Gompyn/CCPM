@@ -327,9 +327,10 @@ def main():
     # Preprocessing the datasets.
     def preprocess_function_sep(examples, sep: str=f' {tokenizer.sep_token} '):
         input = [
-            sep.join([translation] + choices)
+            translation+sep.join(choices)
             for translation, choices in zip(examples[context_name], examples[choice_name])
         ]
+
 
         # Flatten out
         # first_sentences = sum(translation, [])
@@ -342,6 +343,11 @@ def main():
             max_length=max_seq_length,
             padding="max_length" if data_args.pad_to_max_length else False,
         )
+        index_list=[]
+        for i in range(len(tokenized_examples['input_ids'])):
+            index=[j for j,e in enumerate(tokenized_examples['input_ids'][i]) if e == tokenized_examples['input_ids'][i][len(tokenized_examples['attention_mask'][i])-1]]
+            index_list.append([index[0]-(index[-1]-index[-2])]+index)
+        tokenized_examples['ping_ids']=[index_list[i]+[0 for j in range(len(tokenized_examples['input_ids'][i])-len(index_list[i]))] for i in range(len(index_list))]
         if 'answer' in examples:
             tokenized_examples['labels'] = examples['answer']
         return tokenized_examples 
@@ -372,7 +378,7 @@ def main():
             tokenized_examples['labels'] = examples['answer']
         return tokenized_examples 
 
-    preprocess_function = preprocess_function_punc
+    preprocess_function = preprocess_function_sep
 
     if training_args.do_train:
         if "train" not in raw_datasets:
