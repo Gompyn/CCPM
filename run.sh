@@ -5,11 +5,12 @@ TOKENIZERS_PARALLELISM=true python main.py \
           --learning_rate 5e-5  --fp16 \
           --num_train_epochs 10 \
           --output_dir results \
-          --per_device_eval_batch_size=64 \
-          --per_device_train_batch_size=64 \
+          --per_device_eval_batch_size=16 \
+          --per_device_train_batch_size=16 \
           --overwrite_output \
           --evaluation_strategy 'epoch' \
-          --save_strategy 'epoch'
+          --save_strategy 'epoch' \
+          --logging_strategy 'epoch' \
           --dataloader_num_workers=8 \
           --load_best_model_at_end \
           --metric_for_best_model 'accuracy' \
