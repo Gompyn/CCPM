@@ -27,6 +27,9 @@ from typing import Optional, Union
 import datasets
 import numpy as np
 import torch
+import torch.nn.functional as F
+from torch.nn import MSELoss, CrossEntropyLoss, BCEWithLogitsLoss
+from transformers.modeling_outputs import SequenceClassifierOutput
 from datasets import load_dataset
 
 import json
@@ -34,7 +37,7 @@ import json
 import transformers
 from transformers import (
     AutoConfig,
-    BertForSequenceClassification,
+    BertModel,
     AutoTokenizer,
     HfArgumentParser,
     Trainer,
@@ -46,6 +49,84 @@ from transformers.file_utils import PaddingStrategy
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer_utils import get_last_checkpoint, PredictionOutput
 
+
+class BertWithSimilarityHead(BertModel):
+    def __init__(self, config):
+        super().__init__(config)
+        self.post_init()
+    
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        token_type_ids=None,
+        position_ids=None,
+        head_mask=None,
+        inputs_embeds=None,
+        encoder_hidden_states=None,
+        encoder_attention_mask=None,
+        seps=None,
+        labels=None,
+        output_attentions=None,
+        output_hidden_states=None,
+        return_dict=None,
+    ):
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        outputs = super().forward(
+            input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            head_mask=head_mask,
+            inputs_embeds=inputs_embeds,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+
+        last_layer = outputs[0]
+
+        logits = torch.zeros((input_ids.shape[0], self.config.num_labels), dtype=last_layer.dtype, device=last_layer.device)
+
+        choices = torch.stack([
+            torch.stack([
+                torch.sum(last_layer[i][seps[i][j]+1:seps[i][j+1]], dim=0)
+                for j in range(4)
+            ])
+            for i in range(last_layer.shape[0])
+        ])
+        # for i in range(len(last_layer)):#last_layer:16*112*768
+        #     sentences = [torch.sum(last_layer[i][seps[i][j]+1:seps[i][j+1]], dim=0) for j in range(4)]
+        #     def mysum(l):
+        #         res = l[0]
+        #         for i in l[1:]:
+        #             res = res + i
+        #         return res
+        #     scores = [mysum([torch.cosine_similarity(sentence[j], sentence[k], dim=0) for k in range(4)]) for j in range(4)]
+        #     for k in range(4):
+        #         logits[i][k] = scores[k]
+
+        # sentences = torch.einsum('bsh,bls->blh', last_layer, seps)
+        choices = F.normalize(choices, p=2, dim=-1)
+        logits = torch.einsum('blh,bmh->bl', choices, choices)
+
+        #logits=torch.softmax(logits,dim=1)
+
+        loss = None
+        if labels is not None:
+            loss_fct = CrossEntropyLoss()
+            loss = loss_fct(logits, labels)
+        if not return_dict:
+            output = (logits,) + outputs[2:]
+            return ((loss,) + output) if loss is not None else output
+
+        return SequenceClassifierOutput(
+            loss=loss,
+            logits=logits,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+        )
 
 
 logger = logging.getLogger(__name__)
@@ -294,7 +375,7 @@ def main():
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
     )
-    model = BertForSequenceClassification.from_pretrained(
+    model = BertWithSimilarityHead.from_pretrained(
         model_args.model_name_or_path,
         from_tf=bool(".ckpt" in model_args.model_name_or_path),
         config=config,
@@ -310,12 +391,12 @@ def main():
 
     if data_args.max_seq_length is None:
         max_seq_length = tokenizer.model_max_length
-        if max_seq_length > 1024:
+        if max_seq_length > 512:
             logger.warning(
                 f"The tokenizer picked seems to have a very large `model_max_length` ({tokenizer.model_max_length}). "
-                "Picking 1024 instead. You can change that default value by passing --max_seq_length xxx."
+                "Picking 512 instead. You can change that default value by passing --max_seq_length xxx."
             )
-            max_seq_length = 1024
+            max_seq_length = 512
     else:
         if data_args.max_seq_length > tokenizer.model_max_length:
             logger.warning(
@@ -327,7 +408,7 @@ def main():
     # Preprocessing the datasets.
     def preprocess_function_sep(examples, sep: str=f' {tokenizer.sep_token} '):
         input = [
-            translation+sep.join(choices)
+            sep.join([translation] + choices)
             for translation, choices in zip(examples[context_name], examples[choice_name])
         ]
 
@@ -340,14 +421,14 @@ def main():
         tokenized_examples = tokenizer(
             input,
             truncation=True,
+            pad_to_multiple_of=8,
             max_length=max_seq_length,
-            padding="max_length" if data_args.pad_to_max_length else False,
+            padding=True
         )
-        index_list=[]
-        for i in range(len(tokenized_examples['input_ids'])):
-            index=[j for j,e in enumerate(tokenized_examples['input_ids'][i]) if e == tokenized_examples['input_ids'][i][len(tokenized_examples['attention_mask'][i])-1]]
-            index_list.append([index[0]-(index[-1]-index[-2])]+index)
-        tokenized_examples['ping_ids']=[index_list[i]+[0 for j in range(len(tokenized_examples['input_ids'][i])-len(index_list[i]))] for i in range(len(index_list))]
+        tokenized_examples['seps'] = [
+            ([i for i, x in enumerate(input_ids) if x == tokenizer.sep_token_id] + [0] * len(input_ids))[:len(input_ids)]
+            for input_ids in tokenized_examples["input_ids"]
+        ]
         if 'answer' in examples:
             tokenized_examples['labels'] = examples['answer']
         return tokenized_examples 
@@ -390,6 +471,7 @@ def main():
             train_dataset = train_dataset.map(
                 preprocess_function,
                 batched=True,
+                batch_size=None,
                 num_proc=data_args.preprocessing_num_workers,
                 load_from_cache_file=not data_args.overwrite_cache,
             )
@@ -404,6 +486,7 @@ def main():
             eval_dataset = eval_dataset.map(
                 preprocess_function,
                 batched=True,
+                batch_size=None,
                 num_proc=data_args.preprocessing_num_workers,
                 load_from_cache_file=not data_args.overwrite_cache,
             )
@@ -420,6 +503,7 @@ def main():
             predict_dataset = predict_dataset.map(
                 preprocess_function,
                 batched=True,
+                batch_size=None,
                 num_proc=data_args.preprocessing_num_workers,
                 load_from_cache_file=not data_args.overwrite_cache,
             )
