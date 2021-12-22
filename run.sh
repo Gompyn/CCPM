@@ -5,8 +5,8 @@ TOKENIZERS_PARALLELISM=true python main.py \
           --learning_rate 5e-5  --fp16 \
           --num_train_epochs 10 \
           --output_dir results \
-          --per_device_eval_batch_size=16 \
-          --per_device_train_batch_size=16 \
+          --per_device_eval_batch_size=64 \
+          --per_device_train_batch_size=64 \
           --overwrite_output \
           --evaluation_strategy 'epoch' \
           --save_strategy 'epoch' \

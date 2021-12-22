@@ -344,7 +344,7 @@ def main():
 
     # Preprocessing the datasets.
     def preprocess_function(examples):
-        translation = [[context] * 4 for context in examples[context_name]]
+        translation = [[""] * 4 for context in examples[context_name]]
         classic_poetry = [
             [c for c in choices] for choices in examples[choice_name]
         ]
