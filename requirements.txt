@@ -92,7 +92,7 @@ transformers==4.14.1
       importlib-metadata==4.8.2
         typing-extensions==4.0.1
         zipp==3.6.0
-    joblib==1.1.0
+    joblib==1.2.0
     regex==2021.11.10
     six==1.16.0
     tqdm==4.62.3
